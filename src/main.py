@@ -33,11 +33,26 @@ def CreateLibFroont(pathlibs, outdir, namelibrary):
     return True
 def CreateLibSymb(pathlibs, outdir, namelibrary):
     listcomponents = os.listdir(pathlibs)
+    filelib = []
+    startfilelib = []
+    endfilelib = []
     for namecomponent in listcomponents:
         newpath = os.path.join(pathlibs, namecomponent)
         newpath = os.path.join(newpath, os.listdir(newpath)[1])
         newpath = os.path.join(newpath, os.listdir(newpath)[0])
         newpath = os.path.join(newpath, os.listdir(newpath)[0])#encontrammos lib con 0
+
+        with open(newpath, "r") as file:
+            data = file.read()
+        listdata = data.split("\n")
+        filelib = filelib + listdata[2:(len(listdata)-3)]
+
+        startfilelib = listdata[:2]
+        endfilelib = listdata[(len(listdata)-3):]
+    datalib = startfilelib + filelib + endfilelib
+    with open(os.path.join(outdir,f"{namelibrary}.lib"), "w") as file:
+        datalibstr = "\n".join(datalib)
+        file.write(datalibstr)
         #process file
     return True
 if __name__=="__main__":

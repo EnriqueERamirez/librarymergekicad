@@ -1,19 +1,7 @@
 import os
-pathlibs = "libs"
-listcomponents = os.listdir(pathlibs)
-for namecomponent in listcomponents:
-    newpath = os.path.join(pathlibs, namecomponent)
-    newpath = os.path.join(newpath, os.listdir(newpath)[1])
-    newpath = os.path.join(newpath, os.listdir(newpath)[0])
-    newpath = os.path.join(newpath, os.listdir(newpath)[1])#encontrammos lib con 0
-    newpath = os.path.join(newpath, os.listdir(newpath)[0])
-
-    print(newpath)
-for namecomponent in listcomponents:
-    newpath = os.path.join(pathlibs, namecomponent)
-    newpath = os.path.join(newpath, os.listdir(newpath)[1])
-    newpath = os.path.join(newpath, os.listdir(newpath)[0])
-    newpath = os.path.join(newpath, os.listdir(newpath)[0])#encontrammos lib con 0
-    print(newpath)
-
-print(listcomponents)
+pathlib = "libs\\ul_ADXL345TCCZ-EP\\KiCAD\\2022-11-04_19-26-34\\2022-11-04_19-26-34.lib"
+with open(pathlib, "r") as file:
+    data = file.read()
+listdata = data.split("\n")
+# print(listdata[(len(listdata)-3):])
+print(listdata[:2])

@@ -1,65 +1,75 @@
 import os
 import argparse
-import logging
 import shutil
-def ExistlistLib(dirlibs):
-    if not os.path.exists(dirlibs):
-        return False
-    return True
-def create_dirt(outdir, namelibrary):
-    #crear directorios si no existen
-    if not os.path.exists(outdir):
-        os.mkdir(outdir)
-    if not os.path.exists(os.path.join(outdir,namelibrary+".pretty")):
-        os.mkdir(os.path.join(outdir,namelibrary+".pretty"))
-    return True
-def CreateLibFroont(pathlibs, outdir, namelibrary):
-    listcomponents = os.listdir(pathlibs)
-    for namecomponent in listcomponents:
-        newpath = os.path.join(pathlibs, namecomponent)
-        newpath = os.path.join(newpath, os.listdir(newpath)[1])
-        newpath = os.path.join(newpath, os.listdir(newpath)[0])
-        newpath = os.path.join(newpath, os.listdir(newpath)[1])#encontrammos lib con 0
-        newpath = os.path.join(newpath, os.listdir(newpath)[0])
-        shutil.copyfile(newpath, os.path.join(outdir, namelibrary+".pretty",f"{namecomponent}.kicad_mod"))
-    return True
-def CreateLibSymb(pathlibs, outdir, namelibrary):
-    listcomponents = os.listdir(pathlibs)
-    filelib = []
-    startfilelib = []
-    endfilelib = []
-    for namecomponent in listcomponents:
-        newpath = os.path.join(pathlibs, namecomponent)
-        newpath = os.path.join(newpath, os.listdir(newpath)[1])
-        newpath = os.path.join(newpath, os.listdir(newpath)[0])
-        newpath = os.path.join(newpath, os.listdir(newpath)[0])#encontrammos lib con 0
 
-        with open(newpath, "r") as file:
-            data = file.read()
-        listdata = data.split("\n")
-        filelib = filelib + listdata[2:(len(listdata)-3)]
+def path_exists(path):
+    return os.path.exists(path)
 
-        startfilelib = listdata[:2]
-        endfilelib = listdata[(len(listdata)-3):]
-    datalib = startfilelib + filelib + endfilelib
-    datalib = [x for x in datalib if x!='']
-    with open(os.path.join(outdir,f"{namelibrary}.lib"), "w") as file:
-        datalibstr = "\n".join(datalib)
-        file.write(datalibstr)
-        #process file
-    return True
+def ensure_directory_exists(dir_path):
+    if not path_exists(dir_path):
+        os.mkdir(dir_path)
+
+def find_footprint_path(base_path, version):
+    directory = 'KiCAD' if version == 'v5' else f'KiCAD{version}'
+    footprint_path = os.path.join(base_path, directory, 'footprints.pretty')
+    if not os.path.exists(footprint_path):
+        raise ValueError(f"Directory structure not as expected in {base_path}")
+    return footprint_path
+
+def find_symbol_path(base_path, version):
+    directory = 'KiCAD' if version == 'v5' else f'KiCAD{version}'
+    symbol_path_dir = os.path.join(base_path, directory)
+
+    if version == "v5":
+        file_extension = ".lib"
+    else:
+        file_extension = ".kicad_sym"
+
+    symbols = [file for file in os.listdir(symbol_path_dir) if file.endswith(file_extension)]
+    if not symbols:
+        raise ValueError(f"Directory structure not as expected in {base_path}")
+    return os.path.join(symbol_path_dir, symbols[0])
+
+def create_front_lib(pathlibs, outdir, namelibrary, version):
+    for namecomponent in os.listdir(pathlibs):
+        try:
+            library_dir = find_footprint_path(os.path.join(pathlibs, namecomponent), version)
+            for footprint in os.listdir(library_dir):
+                footprint_path = os.path.join(library_dir, footprint)
+                dest_path = os.path.join(outdir, f"{namelibrary}.pretty", footprint)
+                shutil.copyfile(footprint_path, dest_path)
+        except Exception as e:
+            print(f"Error processing {namecomponent}: {e}")
+
+def create_symbol_lib(pathlibs, outdir, namelibrary, version):
+    symbol_lib = []
+    for namecomponent in os.listdir(pathlibs):
+        try:
+            symbol_file_path = find_symbol_path(os.path.join(pathlibs, namecomponent), version)
+            with open(symbol_file_path, "r") as file:
+                data = file.readlines()
+            symbol_lib.extend(data)
+        except Exception as e:
+            print(f"Error processing {namecomponent}: {e}")
+
+    with open(os.path.join(outdir, f"{namelibrary}.lib"), "w") as file:
+        file.writelines(symbol_lib)
+
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-n", "--name", help="Nombre de la libreria resultante", default = "LibraryCustom")
-    parser.add_argument("-lb", "--Librarys", help="Directorio donde esta ubicado el listado de librerias", default = "lib")
-    parser.add_argument("-o", "--out", help="Directorio de salida de la libreria", default = "out")
-    parser.add_argument("-dg", "--debug", help="Activacion de consola para arreglar errores", default = False)
-    args = parser.parse_args()
-    return args
+    parser.add_argument("-n", "--name", help="Nombre de la libreria resultante", default="LibraryCustom")
+    parser.add_argument("-lb", "--Librarys", help="Directorio donde esta ubicado el listado de librerias", default="lib")
+    parser.add_argument("-o", "--out", help="Directorio de salida de la libreria", default="out")
+    parser.add_argument("-v", "--version", help="Version de KiCad (v5 o v6)", default="v5")
+    return parser.parse_args()
 
-if __name__=="__main__":
+if __name__ == "__main__":
     args = get_args()
-    if ExistlistLib(args.Librarys):
-        create_dirt(args.out, args.name)
-        CreateLibFroont(args.Librarys, args.out, args.name)
-        CreateLibSymb(args.Librarys, args.out, args.name)
+    if path_exists(args.Librarys):
+        ensure_directory_exists(args.out)
+        ensure_directory_exists(os.path.join(args.out, args.name + ".pretty"))
+        create_front_lib(args.Librarys, args.out, args.name, args.version)
+        create_symbol_lib(args.Librarys, args.out, args.name, args.version)
+    else:
+        print(f"Error: Directory {args.Librarys} does not exist.")
+

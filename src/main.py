@@ -56,9 +56,39 @@ def is_valid_library_directory(path):
         
     return True
 
+def find_kicad_directory(component_path, version):
+    """
+    Find the KiCAD directory within a component.
+    Handles both nested (KiCADv6/) and flat structures.
+    
+    Args:
+    component_path (str): The path to the component.
+    version (str): The KiCad version.
+    
+    Returns:
+    str: The path to the KiCAD directory, or the component_path if flat structure.
+    """
+    # Expected directory names
+    directory_names = [
+        'KiCAD' if version == 'v5' else f'KiCAD{version}',
+        'KiCAD',  # fallback
+        'kicad',
+        'KICAD'
+    ]
+    
+    # Check if nested structure exists
+    for dir_name in directory_names:
+        potential_path = os.path.join(component_path, dir_name)
+        if os.path.isdir(potential_path):
+            return potential_path
+    
+    # If no nested structure, return component_path (flat structure)
+    return component_path
+
 def find_footprint_path(base_path, version):
     """
     Find the path to the footprint.
+    Handles both nested (KiCADv6/footprints.pretty) and flat structures.
 
     Args:
     base_path (str): The base path to search for the footprint.
@@ -67,35 +97,51 @@ def find_footprint_path(base_path, version):
     Returns:
     str: The path to the footprint.
     """
-    directory = 'KiCAD' if version == 'v5' else f'KiCAD{version}'
-    footprint_path = os.path.join(base_path, directory, 'footprints.pretty')
-    if not os.path.exists(footprint_path):
-        raise ValueError(f"Directory structure not as expected in {base_path}")
-    return footprint_path
+    kicad_dir = find_kicad_directory(base_path, version)
+    footprint_path = os.path.join(kicad_dir, 'footprints.pretty')
+    
+    if os.path.exists(footprint_path):
+        return footprint_path
+    
+    # Try flat structure - look for .kicad_mod files in the base directory
+    for file in os.listdir(base_path):
+        if file.endswith('.kicad_mod'):
+            # Footprints exist in flat structure
+            return base_path
+    
+    raise ValueError(f"No footprint directory found in {base_path}")
 
 def find_symbol_path(base_path, version):
     """
     Find the path to the symbol.
+    Handles both nested (KiCADv6/) and flat structures.
 
     Args:
     base_path (str): The base path to search for the symbol.
     version (str): The version of KiCad.
 
     Returns:
-    str: The path to the symbol.
+    str: The path to the symbol file.
     """
-    directory = 'KiCAD' if version == 'v5' else f'KiCAD{version}'
-    symbol_path_dir = os.path.join(base_path, directory)
-
+    kicad_dir = find_kicad_directory(base_path, version)
+    
     if version == "v5":
         file_extension = ".lib"
     else:
         file_extension = ".kicad_sym"
 
-    symbols = [file for file in os.listdir(symbol_path_dir) if file.endswith(file_extension)]
-    if not symbols:
-        raise ValueError(f"Directory structure not as expected in {base_path}")
-    return os.path.join(symbol_path_dir, symbols[0])
+    # Check in the kicad_dir first
+    if os.path.isdir(kicad_dir):
+        symbols = [file for file in os.listdir(kicad_dir) if file.endswith(file_extension)]
+        if symbols:
+            return os.path.join(kicad_dir, symbols[0])
+    
+    # Check in base_path for flat structure
+    symbols = [file for file in os.listdir(base_path) if file.endswith(file_extension)]
+    if symbols:
+        return os.path.join(base_path, symbols[0])
+    
+    raise ValueError(f"No symbol file (.{file_extension}) found in {base_path}")
 
 def create_front_lib(pathlibs, outdir, namelibrary, version):
     """
@@ -126,12 +172,15 @@ def create_front_lib(pathlibs, outdir, namelibrary, version):
             library_dir = find_footprint_path(component_path, version)
             for footprint in os.listdir(library_dir):
                 footprint_path = os.path.join(library_dir, footprint)
-                dest_path = os.path.join(outdir, f"{namelibrary}.pretty", footprint)
-                shutil.copyfile(footprint_path, dest_path)
+                # Only copy files, not directories
+                if os.path.isfile(footprint_path):
+                    dest_path = os.path.join(outdir, f"{namelibrary}.pretty", footprint)
+                    shutil.copyfile(footprint_path, dest_path)
             processed_count += 1
             print(f"Processed footprints from {namecomponent}")
         except Exception as e:
             print(f"Error processing {namecomponent}: {e}")
+            skipped_count += 1
     
     print(f"Footprint processing complete: {processed_count} libraries processed, {skipped_count} skipped")
 
@@ -220,6 +269,7 @@ def create_symbol_lib_v5(pathlibs, outdir, namelibrary):
             print(f"Processed symbols from {namecomponent}")
         except Exception as e:
             print(f"Error processing {namecomponent}: {e}")
+            skipped_count += 1
 
     with open(os.path.join(outdir, f"{namelibrary}.lib"), "w", encoding='utf-8') as file:
         file.writelines(symbol_lib)
@@ -267,6 +317,7 @@ def create_symbol_lib_kicad_sym(pathlibs, outdir, namelibrary, version):
             
         except Exception as e:
             print(f"Error processing {namecomponent}: {e}")
+            skipped_count += 1
 
     # Create the combined .kicad_sym file
     output_file = os.path.join(outdir, f"{namelibrary}.kicad_sym")

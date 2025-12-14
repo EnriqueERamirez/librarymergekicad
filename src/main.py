@@ -68,10 +68,13 @@ def find_kicad_directory(component_path, version):
     Returns:
     str: The path to the KiCAD directory, or the component_path if flat structure.
     """
-    # Expected directory names
+    # Expected directory names - orden importa, más específico primero
     directory_names = [
-        'KiCAD' if version == 'v5' else f'KiCAD{version}',
-        'KiCAD',  # fallback
+        f'KiCAD{version}',  # KiCADv6, KiCADv7, etc.
+        'KiCADv6',
+        'KiCADv7',
+        'KiCADv8',
+        'KiCAD',  # fallback genérico
         'kicad',
         'KICAD'
     ]
@@ -85,67 +88,92 @@ def find_kicad_directory(component_path, version):
     # If no nested structure, return component_path (flat structure)
     return component_path
 
-def find_footprint_path(base_path, version):
+def find_footprint_paths(base_path, version):
     """
-    Find the path to the footprint.
-    Handles both nested (KiCADv6/footprints.pretty) and flat structures.
+    Find ALL paths to footprints recursively.
+    Handles multiple structures:
+    - KiCADv6/footprints.pretty/ (standard)
+    - Individual .kicad_mod files scattered
+    - Flat structure with .kicad_mod files
 
     Args:
-    base_path (str): The base path to search for the footprint.
+    base_path (str): The base path to search for footprints.
     version (str): The version of KiCad.
 
     Returns:
-    str: The path to the footprint.
+    list: List of tuples (file_path, parent_directory) for each footprint found.
+          Returns empty list if no footprints found.
     """
+    footprint_files = []
+    
+    # Strategy 1: Look for footprints.pretty directory
     kicad_dir = find_kicad_directory(base_path, version)
-    footprint_path = os.path.join(kicad_dir, 'footprints.pretty')
+    footprint_pretty_path = os.path.join(kicad_dir, 'footprints.pretty')
     
-    if os.path.exists(footprint_path):
-        return footprint_path
+    if os.path.exists(footprint_pretty_path):
+        # Found the standard .pretty directory
+        for file in os.listdir(footprint_pretty_path):
+            if file.endswith('.kicad_mod'):
+                file_path = os.path.join(footprint_pretty_path, file)
+                footprint_files.append((file_path, footprint_pretty_path))
+        
+        if footprint_files:
+            return footprint_files
     
-    # Try flat structure - look for .kicad_mod files in the base directory
-    for file in os.listdir(base_path):
-        if file.endswith('.kicad_mod'):
-            # Footprints exist in flat structure
-            return base_path
+    # Strategy 2: Search recursively for individual .kicad_mod files
+    for root, dirs, files in os.walk(base_path):
+        # Skip non-relevant directories
+        dirs[:] = [d for d in dirs if d not in ['3D', '__pycache__', '.git', 'models']]
+        
+        for file in files:
+            if file.endswith('.kicad_mod'):
+                file_path = os.path.join(root, file)
+                footprint_files.append((file_path, root))
     
-    raise ValueError(f"No footprint directory found in {base_path}")
+    return footprint_files
 
-def find_symbol_path(base_path, version):
+def find_symbol_files(base_path, version):
     """
-    Find the path to the symbol.
-    Handles both nested (KiCADv6/) and flat structures.
+    Find ALL los archivos de símbolos recursivamente.
+    Maneja tanto estructuras anidadas (KiCADv6/) como planas.
 
     Args:
-    base_path (str): The base path to search for the symbol.
+    base_path (str): The base path to search for symbols.
     version (str): The version of KiCad.
 
     Returns:
-    str: The path to the symbol file.
+    list: Lista de rutas a archivos de símbolo encontrados.
     """
-    kicad_dir = find_kicad_directory(base_path, version)
+    symbol_files = []
     
     if version == "v5":
         file_extension = ".lib"
     else:
         file_extension = ".kicad_sym"
-
-    # Check in the kicad_dir first
+    
+    # Primero, busca en la estructura anidada estándar
+    kicad_dir = find_kicad_directory(base_path, version)
+    
     if os.path.isdir(kicad_dir):
-        symbols = [file for file in os.listdir(kicad_dir) if file.endswith(file_extension)]
-        if symbols:
-            return os.path.join(kicad_dir, symbols[0])
+        for file in os.listdir(kicad_dir):
+            if file.endswith(file_extension):
+                symbol_files.append(os.path.join(kicad_dir, file))
     
-    # Check in base_path for flat structure
-    symbols = [file for file in os.listdir(base_path) if file.endswith(file_extension)]
-    if symbols:
-        return os.path.join(base_path, symbols[0])
+    # Si no encontramos nada, busca recursivamente en todo el directorio
+    if not symbol_files:
+        for root, dirs, files in os.walk(base_path):
+            # Evita procesar directorios que no son relevantes
+            dirs[:] = [d for d in dirs if d not in ['3D', '__pycache__', '.git']]
+            
+            for file in files:
+                if file.endswith(file_extension):
+                    symbol_files.append(os.path.join(root, file))
     
-    raise ValueError(f"No symbol file (.{file_extension}) found in {base_path}")
+    return symbol_files
 
 def create_front_lib(pathlibs, outdir, namelibrary, version):
     """
-    Create the front library.
+    Create the front library (footprints).
 
     Args:
     pathlibs (str): The path to the libraries.
@@ -169,15 +197,25 @@ def create_front_lib(pathlibs, outdir, namelibrary, version):
             continue
             
         try:
-            library_dir = find_footprint_path(component_path, version)
-            for footprint in os.listdir(library_dir):
-                footprint_path = os.path.join(library_dir, footprint)
-                # Only copy files, not directories
-                if os.path.isfile(footprint_path):
-                    dest_path = os.path.join(outdir, f"{namelibrary}.pretty", footprint)
+            # CORRECCIÓN: Usa find_footprint_paths para encontrar TODOS los footprints
+            footprint_files = find_footprint_paths(component_path, version)
+            
+            if not footprint_files:
+                print(f"Warning: No footprints found in {namecomponent}")
+                skipped_count += 1
+                continue
+            
+            # Procesa todos los footprints encontrados
+            for footprint_path, source_dir in footprint_files:
+                try:
+                    footprint_filename = os.path.basename(footprint_path)
+                    dest_path = os.path.join(outdir, f"{namelibrary}.pretty", footprint_filename)
                     shutil.copyfile(footprint_path, dest_path)
+                except Exception as e:
+                    print(f"Error copying footprint {footprint_filename}: {e}")
+            
             processed_count += 1
-            print(f"Processed footprints from {namecomponent}")
+            print(f"Processed footprints from {namecomponent} ({len(footprint_files)} file(s))")
         except Exception as e:
             print(f"Error processing {namecomponent}: {e}")
             skipped_count += 1
@@ -261,12 +299,21 @@ def create_symbol_lib_v5(pathlibs, outdir, namelibrary):
             continue
             
         try:
-            symbol_file_path = find_symbol_path(component_path, "v5")
-            with open(symbol_file_path, "r", encoding='utf-8') as file:
-                data = file.readlines()
-            symbol_lib.extend(data)
+            symbol_files = find_symbol_files(component_path, "v5")
+            
+            if not symbol_files:
+                print(f"Warning: No symbol files found in {namecomponent}")
+                skipped_count += 1
+                continue
+            
+            # Procesa todos los archivos de símbolo encontrados
+            for symbol_file_path in symbol_files:
+                with open(symbol_file_path, "r", encoding='utf-8') as file:
+                    data = file.readlines()
+                symbol_lib.extend(data)
+            
             processed_count += 1
-            print(f"Processed symbols from {namecomponent}")
+            print(f"Processed symbols from {namecomponent} ({len(symbol_files)} file(s))")
         except Exception as e:
             print(f"Error processing {namecomponent}: {e}")
             skipped_count += 1
@@ -295,25 +342,35 @@ def create_symbol_lib_kicad_sym(pathlibs, outdir, namelibrary, version):
             continue
             
         try:
-            symbol_file_path = find_symbol_path(component_path, version)
-            with open(symbol_file_path, "r", encoding='utf-8') as file:
-                content = file.read()
+            # CORRECIÓN: Usa find_symbol_files para encontrar TODOS los archivos
+            symbol_files = find_symbol_files(component_path, version)
             
-            # Extract version and generator info from the first file
-            if generator_info is None:
-                version_match = re.search(r'\(version\s+(\d+)\)', content)
-                generator_match = re.search(r'\(generator\s+"([^"]+)"\)', content)
+            if not symbol_files:
+                print(f"Warning: No symbol files found in {namecomponent}")
+                skipped_count += 1
+                continue
+            
+            # Procesa todos los archivos de símbolo encontrados
+            for symbol_file_path in symbol_files:
+                with open(symbol_file_path, "r", encoding='utf-8') as file:
+                    content = file.read()
                 
-                if version_match:
-                    version_info = version_match.group(1)
-                if generator_match:
-                    generator_info = generator_match.group(1)
+                # Extract version and generator info from the first file
+                if generator_info is None:
+                    version_match = re.search(r'\(version\s+(\d+)\)', content)
+                    generator_match = re.search(r'\(generator\s+"([^"]+)"\)', content)
+                    
+                    if version_match:
+                        version_info = version_match.group(1)
+                    if generator_match:
+                        generator_info = generator_match.group(1)
+                
+                # Extract symbols from the content
+                symbols = parse_kicad_sym_content(content)
+                all_symbols.extend(symbols)
             
-            # Extract symbols from the content
-            symbols = parse_kicad_sym_content(content)
-            all_symbols.extend(symbols)
             processed_count += 1
-            print(f"Processed symbols from {namecomponent}")
+            print(f"Processed symbols from {namecomponent} ({len(symbol_files)} file(s))")
             
         except Exception as e:
             print(f"Error processing {namecomponent}: {e}")
@@ -367,29 +424,31 @@ def move_3d_models(pathlibs, outdir):
         # Skip invalid directories (like zip files that might appear as directories)
         if not is_valid_library_directory(component_path):
             continue
-            
-        for file in os.listdir(component_path):
-            # Check if the file is a 3D model file
-            if any(file.endswith(ext) for ext in model_extensions):
-                # Define the source and destination paths
-                src_path = os.path.join(component_path, file)
-                dest_path = os.path.join(models3d_dir, file)
-                
-                # Handle file name conflicts
-                counter = 1
-                original_dest_path = dest_path
-                while os.path.exists(dest_path):
-                    name, ext = os.path.splitext(original_dest_path)
-                    dest_path = f"{name}_{counter}{ext}"
-                    counter += 1
-                
-                try:
-                    # Copy the file to the models3d directory (instead of move to preserve originals)
-                    shutil.copy2(src_path, dest_path)
-                    print(f"Copied {file} to models3d directory as {os.path.basename(dest_path)}")
-                    processed_count += 1
-                except Exception as e:
-                    print(f"Error copying {file}: {e}")
+        
+        # Busca recursivamente archivos 3D
+        for root, dirs, files in os.walk(component_path):
+            for file in files:
+                # Check if the file is a 3D model file
+                if any(file.endswith(ext) for ext in model_extensions):
+                    # Define the source and destination paths
+                    src_path = os.path.join(root, file)
+                    dest_path = os.path.join(models3d_dir, file)
+                    
+                    # Handle file name conflicts
+                    counter = 1
+                    original_dest_path = dest_path
+                    while os.path.exists(dest_path):
+                        name, ext = os.path.splitext(original_dest_path)
+                        dest_path = f"{name}_{counter}{ext}"
+                        counter += 1
+                    
+                    try:
+                        # Copy the file to the models3d directory (instead of move to preserve originals)
+                        shutil.copy2(src_path, dest_path)
+                        print(f"Copied {file} to models3d directory as {os.path.basename(dest_path)}")
+                        processed_count += 1
+                    except Exception as e:
+                        print(f"Error copying {file}: {e}")
     
     print(f"3D model processing complete: {processed_count} files copied")
 
